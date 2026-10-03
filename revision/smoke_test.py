@@ -2,7 +2,8 @@
 #  smoke_test.py -- runs EVERY revision stage end to end on small synthetic data
 #  (CPU, ~10 min). It checks that the code paths execute and that the geometry
 #  identities hold; the F1 values it prints mean nothing.
-#      python revision/smoke_test.py
+#      python revision/smoke_test.py               # the three modules
+#      python revision/smoke_test.py --notebook    # the single Colab notebook
 # =============================================================================
 import os, sys, math, json, types, tempfile, time
 import numpy as np
@@ -12,11 +13,26 @@ TMP = tempfile.mkdtemp(prefix="rev_smoke_")
 os.environ["HAR_DATA_ROOT"] = TMP
 os.environ["REV_DIR"] = os.path.join(TMP, "results", "revision")
 
-NS = {"__name__": "pipeline_base"}
-exec(compile(open(os.path.join(HERE, "pipeline_base.py")).read(), "pipeline_base.py", "exec"), NS)
+# --notebook: take the code from the tagged cells of GraviHAR_Revision_Colab.ipynb and run
+# all three in ONE namespace with __name__ == "__main__", exactly as Colab does.
+NOTEBOOK = "--notebook" in sys.argv
+
+
+def _code(module, tag):
+    if not NOTEBOOK:
+        return open(os.path.join(HERE, module)).read()
+    nb = json.load(open(os.path.join(HERE, "GraviHAR_Revision_Colab.ipynb")))
+    cells = [c for c in nb["cells"] if tag in c.get("metadata", {}).get("tags", [])]
+    assert len(cells) == 1, (tag, len(cells))
+    return "".join(cells[0]["source"])
+
+
+NS = {"__name__": "__main__" if NOTEBOOK else "pipeline_base"}
+exec(compile(_code("pipeline_base.py", "pipeline"), "pipeline", "exec"), NS)
 NS["PRETRAIN_EPOCHS"], NS["FINETUNE_EPOCHS"] = 2, 1
-NS["__name__"] = "revision_experiments"
-exec(compile(open(os.path.join(HERE, "revision_experiments.py")).read(), "revision_experiments.py", "exec"), NS)
+if not NOTEBOOK:
+    NS["__name__"] = "revision_experiments"
+exec(compile(_code("revision_experiments.py", "experiments"), "experiments", "exec"), NS)
 R = NS["REV"]
 R.update(pre_epochs=2, pre_min_epochs=0, ft_epochs=1, ft_bs=64, pre_bs=64,
          budget={"pre": (42,), "ft": (42,)}, budget_baselines={"pre": (42,), "ft": (42,)})
@@ -182,8 +198,13 @@ def _unimts():
 step("UniMTS adapter (stand-in model, real input formatting)", _unimts)
 
 # ----------------------------------------------------------------------------- analysis
-NA = {"__name__": "revision_analysis", "REV_DIR": NS["REV_DIR"]}
-exec(compile(open(os.path.join(HERE, "revision_analysis.py")).read(), "revision_analysis.py", "exec"), NA)
+if NOTEBOOK:
+    NA = NS                                   # same kernel namespace as in Colab
+    exec(compile(_code("revision_analysis.py", "analysis"), "analysis", "exec"), NA)
+    assert isinstance(NS["DATASETS"], dict), "analysis cell overwrote the pipeline's DATASETS"
+else:
+    NA = {"__name__": "revision_analysis", "REV_DIR": NS["REV_DIR"]}
+    exec(compile(_code("revision_analysis.py", "analysis"), "analysis", "exec"), NA)
 
 
 def _analysis():

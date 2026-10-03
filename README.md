@@ -161,5 +161,5 @@ corrected data loading (MotionSense iOS sign convention, subject IDs), the 2x2 a
 five added baselines plus UniMTS, in-domain ceilings, controlled device- and gravity-frame
 rotations on all four datasets, posture classes, source-only hyperparameter selection,
 and the statistics and tables built from one per-run log. Start with
-`revision/REVISION_PLAN.md`; run `revision/Revision_Runner.ipynb` in Colab;
+`revision/REVISION_PLAN.md`; upload the single notebook `revision/GraviHAR_Revision_Colab.ipynb` to Colab and run it top to bottom;
 `python revision/smoke_test.py` checks every stage on synthetic data (CPU, ~3 min).

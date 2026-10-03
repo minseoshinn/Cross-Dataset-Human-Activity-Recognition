@@ -1853,5 +1853,5 @@ _p(f"""
   run_stage("posture")    sit/stand/lie cost of canonicalization (c44)
   run_stage("hparam")     source-only selection + target sensitivity (c40)
   optional: "augspec" "positions" "inference" "labeleff" "autoaug"
-Then: %run -i -n revision/revision_analysis.py ; make_all_tables()
+Then build the tables with make_all_tables() from revision_analysis (Part 3 of the single notebook).
 """)

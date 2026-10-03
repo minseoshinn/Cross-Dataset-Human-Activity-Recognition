@@ -19,7 +19,7 @@ try:
 except NameError:
     REV_DIR = os.environ.get("REV_DIR", os.path.join(os.getcwd(), "revision_results"))
 
-DATASETS = ["hhar", "uci", "motion", "shoaib"]
+ANA_DATASETS = ["hhar", "uci", "motion", "shoaib"]
 DNAME = {"hhar": "HHAR", "uci": "UCI-HAR", "motion": "MotionSense", "shoaib": "Shoaib"}
 ARM_LABEL = {
     "XGB_raw": "XGBoost (engineered features)", "XGB_canon": "XGBoost + gravity canon.",
@@ -119,7 +119,7 @@ def holm(p):
 
 def hier_bootstrap(df, arm_hi, arm_lo, metric="macro_f1", n_boot=2000, seed=0):
     """c49. The 12 pairs share datasets (each appears in 6) and each cell has a
-    pretraining x fine-tuning seed structure. Level 1 resamples the 4 DATASETS with
+    pretraining x fine-tuning seed structure. Level 1 resamples the 4 ANA_DATASETS with
     replacement and keeps every directed pair between distinct draws (with
     multiplicity); level 2 resamples pretraining seeds, then fine-tuning seeds,
     inside each cell. Returns the mean difference, its 95% CI and a two-sided
@@ -130,7 +130,7 @@ def hier_bootstrap(df, arm_hi, arm_lo, metric="macro_f1", n_boot=2000, seed=0):
     rng = np.random.default_rng(seed)
     stats, skipped = [], 0
     while len(stats) < n_boot:
-        draw = rng.choice(DATASETS, len(DATASETS), replace=True)
+        draw = rng.choice(ANA_DATASETS, len(ANA_DATASETS), replace=True)
         sel = [f"{s}->{t}" for s, t in itertools.product(draw, draw) if s != t]
         sel = [p for p in sel if p in cells]
         if not sel:
@@ -157,7 +157,7 @@ def lodo(df, arm_hi, arm_lo, metric="macro_f1"):
     that involves one dataset (6 pairs remain). Shows whether one dataset drives it."""
     P = pivot(df, metric, [arm_hi, arm_lo]).dropna()
     out = {}
-    for d in DATASETS:
+    for d in ANA_DATASETS:
         keep = [p for p in P.index if d not in p.split("->")]
         dd = (P.loc[keep, arm_hi] - P.loc[keep, arm_lo])
         out[f"without_{d}"] = float(dd.mean()) if len(dd) else np.nan
@@ -375,7 +375,7 @@ def _rotation_figs(cur, psi):
             if a in set(cur.arm)]
     perts = [p for p in ["device_x", "device_y", "device_z", "phys_tilt", "phys_heading"]
              if p in set(cur.perturb)]
-    ds = [d for d in DATASETS if d in set(cur.source)]
+    ds = [d for d in ANA_DATASETS if d in set(cur.source)]
     fig, ax = plt.subplots(len(ds), len(perts), figsize=(3.0 * len(perts), 2.4 * len(ds)),
                            squeeze=False, sharey=True)
     for i, d in enumerate(ds):

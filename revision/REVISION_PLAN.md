@@ -9,8 +9,9 @@ Code in this folder:
 | `pipeline_base.py` | Verbatim copy of notebook cell 20 (loaders, LIMU-BERT, GRU head, operators, XGBoost features). |
 | `revision_experiments.py` | Corrected data layer, one pretraining and one fine-tuning path for all arms, every new experiment, and analyses that need no training. Each run is appended to `SAVE_PATH/revision/runs/*.csv`. |
 | `revision_analysis.py` | Builds every table, figure, test and headline number from those CSVs. Runs without a GPU. |
-| `Revision_Runner.ipynb` | Colab driver, one cell per stage. All stages resume after a disconnect. |
-| `smoke_test.py` | Runs all 19 stages on synthetic data on a CPU in about 3 minutes. It passes. |
+| `GraviHAR_Revision_Colab.ipynb` | **Single file for Colab.** Contains the three modules above plus one cell per stage. All stages resume after a disconnect. |
+| `build_colab_notebook.py` | Rebuilds the single notebook from the three modules after any edit. |
+| `smoke_test.py` | Runs all 19 stages on synthetic data on a CPU in about 3 minutes, from the modules or (`--notebook`) from the single notebook. Both pass. |
 
 ---
 
@@ -149,7 +150,7 @@ These outcomes decide the story, so read them before writing.
 
 ### Run order and cost
 
-1. In Colab, set the GPU runtime and run `Revision_Runner.ipynb`.
+1. Upload `GraviHAR_Revision_Colab.ipynb` to Colab, set the GPU runtime, and run the setup cell and Parts 1–3.
 2. Run `audit` (minutes). Then run `estimate_cost()`, which times one epoch on the GPU and prints projected hours per stage.
 3. Tier 1 (minimum for a resubmission): `xgb`, `ablation`, `baselines`, `ceiling`, `rotation`, `unimts`.
 4. Tier 2: `site`, `posture`, `hparam`, `inference`.
