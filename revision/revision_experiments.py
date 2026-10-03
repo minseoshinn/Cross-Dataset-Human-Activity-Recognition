@@ -564,7 +564,7 @@ def pretrain_rev(X, objective="mlm", seed=42, lam=None, warm=None, verbose=False
     set_seed(seed)
     model = LimuBERT(s_dim=s_dim).to(DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=REV["pre_lr"])
-    Xt = torch.tensor(X, dtype=torch.float32); n = len(Xt)
+    Xt = torch.tensor(X, dtype=torch.float32, device=DEVICE); n = len(Xt)
     op = {"yaw": op_yaw, "so3": op_so3}.get(objective)
     if op is not None and s_dim != 6:
         raise ValueError("rotation consistency needs the 6-channel acc+gyro input")
@@ -573,7 +573,7 @@ def pretrain_rev(X, objective="mlm", seed=42, lam=None, warm=None, verbose=False
         lam_ep = 0.0 if op is None else (lam if warm <= 0 else lam * min(1.0, (ep + 1) / warm))
         model.train(); perm = torch.randperm(n); tm = tc = 0.0
         for i in range(0, n, REV["pre_bs"]):
-            xb = Xt[perm[i:i + REV["pre_bs"]]].to(DEVICE)
+            xb = Xt[perm[i:i + REV["pre_bs"]].to(DEVICE)]
             xm, mask = span_mask(xb)
             l_mlm = F.mse_loss(model(xm)[mask], xb[mask])
             loss = l_mlm
@@ -598,6 +598,14 @@ def pretrain_rev(X, objective="mlm", seed=42, lam=None, warm=None, verbose=False
     return {k: v.cpu() for k, v in model.encoder.state_dict().items()}, hist
 
 
+def _enc_path(name, kind, objective, seed, fp, lam, warm, tag_extra=""):
+    lam_t = lam if objective != "mlm" else 0.0
+    warm_t = warm if objective != "mlm" else 0
+    tag = (f"{REV_VERSION}_{name}_{fp}_{kind}_{objective}_l{lam_t}_w{warm_t}_s{seed}"
+           f"_e{REV['pre_epochs']}{tag_extra}")
+    return tag, os.path.join(REV_DIR, "enc", tag + ".pt")
+
+
 def get_encoder_rev(name, kind, objective, seed, label_mode="merged", lam=None, warm=None,
                     X_override=None, tag_extra=""):
     """Source-scope encoder: pretrained on the full unlabeled pool of `name` (no
@@ -609,11 +617,7 @@ def get_encoder_rev(name, kind, objective, seed, label_mode="merged", lam=None, 
         X, _, _, _, fp = prep_cached(name, label_mode, kind)
     else:
         X, fp = X_override, _fingerprint(X_override)
-    lam_t = lam if objective != "mlm" else 0.0
-    warm_t = warm if objective != "mlm" else 0
-    tag = (f"{REV_VERSION}_{name}_{fp}_{kind}_{objective}_l{lam_t}_w{warm_t}_s{seed}"
-           f"_e{REV['pre_epochs']}{tag_extra}")
-    path = os.path.join(REV_DIR, "enc", tag + ".pt")
+    tag, path = _enc_path(name, kind, objective, seed, fp, lam, warm, tag_extra)
     if os.path.exists(path):
         return torch.load(path, map_location="cpu")
     t0 = time.time()
@@ -669,16 +673,17 @@ def finetune_rev(enc_state, X, y, n_classes, aug=None, seed=42, floor=None, aux=
     cnt = np.bincount(np.asarray(y), minlength=n_classes).astype(float); cnt[cnt == 0] = 1
     cw = torch.tensor(len(y) / (n_classes * cnt), dtype=torch.float32, device=DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=REV["ft_lr"])
-    Xt = torch.tensor(X, dtype=torch.float32); yt = torch.tensor(np.asarray(y), dtype=torch.long)
-    At = None if aux is None else torch.tensor(aux, dtype=torch.float32)
+    Xt = torch.tensor(X, dtype=torch.float32, device=DEVICE)
+    yt = torch.tensor(np.asarray(y), dtype=torch.long, device=DEVICE)
+    At = None if aux is None else torch.tensor(aux, dtype=torch.float32, device=DEVICE)
     op = aug if callable(aug) else AUG_OPS[aug]
     n, bs = len(Xt), REV["ft_bs"]
     for _ in range(epochs):
         model.train(); perm = torch.randperm(n)
         for i in range(0, n, bs):
-            idx = perm[i:i + bs]
-            xb = Xt[idx].to(DEVICE); yb = yt[idx].to(DEVICE)
-            ab = None if At is None else At[idx].to(DEVICE)
+            idx = perm[i:i + bs].to(DEVICE)
+            xb = Xt[idx]; yb = yt[idx]
+            ab = None if At is None else At[idx]
             if op is not None and random.random() >= floor:
                 with torch.no_grad():
                     xb = op(xb)
@@ -1776,38 +1781,227 @@ def inference_benchmark(n=2048, reps=20, export=True):
 # =============================================================================
 #  8. COST ESTIMATE + DRIVER
 # =============================================================================
-def estimate_cost(source="shoaib", n_epochs=1):
-    """Time one pretraining epoch and one fine-tuning epoch on the largest source and
-    project the run budget of every stage."""
-    X = prep_cached(source, "merged", "canon")[0]
-    y = get_ds(source)[1]
-    labels = sorted(np.unique(y)); lmap = {c: i for i, c in enumerate(labels)}
-    old = (REV["pre_epochs"], REV["ft_epochs"], REV["pre_min_epochs"])
-    REV["pre_epochs"], REV["ft_epochs"], REV["pre_min_epochs"] = n_epochs, n_epochs, 0
-    try:
-        t0 = time.time(); pretrain_rev(X, "yaw", 0); tp = (time.time() - t0) / n_epochs
-        t0 = time.time(); finetune_rev(None, X, np.array([lmap[v] for v in y]), len(labels), "yaw", 0)
-        tf = (time.time() - t0) / n_epochs
-    finally:
-        REV["pre_epochs"], REV["ft_epochs"], REV["pre_min_epochs"] = old
-    ft_run = tf * REV["ft_epochs"]; pre_run = tp * 50   # ~50 epochs with early stopping
+def _timeit(fn, n=30, warm=5):
+    for _ in range(warm):
+        fn()
+    if DEVICE.type == "cuda":
+        torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    for _ in range(n):
+        fn()
+    if DEVICE.type == "cuda":
+        torch.cuda.synchronize()
+    return (time.perf_counter() - t0) / n
+
+
+def _measure_rates(unimts=False):
+    """Per-step times of the real training code on THIS runtime (about a minute)."""
+    X = prep_cached("hhar", "merged", "canon")[0]
+    xf = torch.tensor(X[:REV["ft_bs"]], dtype=torch.float32, device=DEVICE)
+    yf = torch.randint(0, 5, (len(xf),), device=DEVICE)
+    m = HARModelRev(5).to(DEVICE); opt = torch.optim.Adam(m.parameters(), lr=1e-3)
+
+    def ft_step():
+        x = op_yaw(xf) if random.random() >= REV["floor"] else xf
+        loss = F.cross_entropy(m(x), yf)
+        opt.zero_grad(); loss.backward(); opt.step()
+
+    xp = torch.tensor(X[:REV["pre_bs"]], dtype=torch.float32, device=DEVICE)
+    lb = LimuBERT().to(DEVICE); opt2 = torch.optim.Adam(lb.parameters(), lr=1e-3)
+
+    def pre_step(cons):
+        xm, mask = span_mask(xp)
+        loss = F.mse_loss(lb(xm)[mask], xp[mask])
+        if cons:
+            e1 = lb.encoder(op_yaw(op_jitter(xp, 0.03))).mean(1)
+            e2 = lb.encoder(op_yaw(op_jitter(xp, 0.03))).mean(1)
+            loss = loss + 0.1 * (1 - F.cosine_similarity(e1, e2, dim=1).mean())
+        opt2.zero_grad(); loss.backward(); opt2.step()
+
+    r = {"ft_step": _timeit(ft_step), "pre_step": _timeit(lambda: pre_step(False)),
+         "pre_step_cons": _timeit(lambda: pre_step(True))}
+    Xr = get_ds("hhar")[0][:4096]
+
+    def ev():
+        Q = make_perturbation(Xr, "phys_tilt", 45.0)
+        Xp = prep(rotate_windows(Xr, Q), "canon")
+        predict_rev(m, Xp); residual_heading(gravity_dirs(Xr)[0], Q)
+    r["eval_per_window"] = _timeit(ev, n=3, warm=1) / len(Xr)
+    t0 = time.perf_counter(); _features_df_from_raw(get_ds("hhar")[0][:200])
+    r["xgb_feat_per_window"] = (time.perf_counter() - t0) / 200
+    rng = np.random.default_rng(0)
+    Fx, Fy = rng.normal(size=(4000, 110)), rng.integers(0, 4, 4000)
+    t0 = time.perf_counter(); make_xgb(4).fit(Fx, Fy)
+    r["xgb_fit_per_sample_class"] = (time.perf_counter() - t0) / (4000 * 4)
+    r["unimts_measured"] = False
+    r["unimts_step"] = 0.06 if (DEVICE.type == "cuda" and "A100" in torch.cuda.get_device_name(0)) else 0.25
+    if unimts:
+        from types import SimpleNamespace
+        ck = setup_unimts()
+        from contrastive import ContrastiveModule
+        um = ContrastiveModule(SimpleNamespace(gyro=0, stft=0, stage="finetune", num_class=5)).to(DEVICE)
+        um.model.load_state_dict(torch.load(ck, map_location=DEVICE))
+        uo = torch.optim.Adam(um.parameters(), lr=1e-4)
+        xb = torch.randn(64, 3, 200, 22, 1, device=DEVICE); yb = torch.randint(0, 5, (64,), device=DEVICE)
+
+        def u_step():
+            loss = F.cross_entropy(um.classifier(xb).float(), yb)
+            uo.zero_grad(); loss.backward(); uo.step()
+        r["unimts_step"] = _timeit(u_step, n=10, warm=2) + 0.01   # + host-side batch building
+        r["unimts_measured"] = True
+        del um; torch.cuda.empty_cache() if DEVICE.type == "cuda" else None
+    return r
+
+
+def _stage_work(pre_epochs_assumed):
+    """Exact amount of work per stage, from the real dataset sizes and budgets.
+    Returns {stage: dict(tier, ft_steps, ft_runs, encoders, eval_windows, xgb_feat,
+    xgb_fit_units, unimts_steps, log, done_filter)}."""
+    ceil_ = lambda a, b: -(-a // b)
+    ft = lambda n: ceil_(int(n), REV["ft_bs"]) * REV["ft_epochs"]
     nb = len(REV["budget"]["pre"]) * len(REV["budget"]["ft"])
-    n_main_arms = len(ABLATION_ARMS + SITE_ARMS + BASELINE_ARMS)
-    stages = {
-        "main (11 arms x 12 pairs)": (12 * n_main_arms * nb, 4 * 8 * len(REV["budget"]["pre"])),
-        "rotation (7 arms x 4 ds x 3 folds x 2)": (7 * 4 * 3 * 2, 0),
-        "ceiling (3 arms, 8 combos x 3 folds x 2)": (3 * 8 * 3 * 2, 0),
-        "posture (4 arms, 4 ds x 3 folds + 6 pairs, x2)": (4 * (12 + 6) * 2, 8),
-        "hparam (9 configs x (4 val + 12 pairs) x 2)": (9 * 16 * 2, 8),
-        "augspec (7 ops x 12 pairs x 4)": (7 * 12 * 4, 0),
-    }
+    nbb = len(REV["budget_baselines"]["pre"]) * len(REV["budget_baselines"]["ft"])
+    sizes, n_all, n_post = {}, {}, {}
+    for d in DATASETS_REV:
+        n_all[d] = len(get_ds(d)[1]); n_post[d] = len(get_ds(d, "posture")[1])
+    for s_, t_ in PAIRS:
+        ys, yt = get_ds(s_)[1], get_ds(t_)[1]
+        lab = sorted(set(np.unique(ys)) & set(np.unique(yt)))
+        sizes[(s_, t_)] = (int(np.isin(ys, lab).sum()), int(np.isin(yt, lab).sum()), len(lab), tuple(lab))
+    src_steps = sum(ft(v[0]) for v in sizes.values())
+    W = {}
+    W["xgb"] = dict(tier=1, ft_runs=0, ft_steps=0, encoders=[], eval_windows=0,
+                    xgb_feat=[(d, k) for d in DATASETS_REV for k in ("raw", "canon")],
+                    xgb_fit_units=sum(v[0] * v[2] for v in sizes.values()) * 2 * 3, unimts_steps=0,
+                    log="xgb", arms=["XGB_raw", "XGB_canon"], expected=12 * 2 * 3)
+    enc_ab = [(d, k, o, ps, "merged", None) for d in DATASETS_REV for ps in REV["budget"]["pre"]
+              for k, o in (("raw", "mlm"), ("canon", "mlm"), ("raw", "yaw"), ("canon", "yaw"))]
+    W["ablation"] = dict(tier=1, ft_runs=4 * nb * 12, ft_steps=4 * nb * src_steps, encoders=enc_ab,
+                         eval_windows=0, xgb_feat=[], xgb_fit_units=0, unimts_steps=0,
+                         log="main", arms=ABLATION_ARMS, expected=4 * nb * 12)
+    enc_b = [(d, k, o, ps, "merged", None) for d in DATASETS_REV for ps in REV["budget_baselines"]["pre"]
+             for k, o in (("raw", "mlm"), ("raw", "so3"), ("pca", "mlm"), ("mizell", "mlm"), ("oit", "mlm"))]
+    W["baselines"] = dict(tier=1, ft_runs=5 * nbb * 12, ft_steps=5 * nbb * src_steps, encoders=enc_b,
+                          eval_windows=0, xgb_feat=[], xgb_fit_units=0, unimts_steps=0,
+                          log="main", arms=BASELINE_ARMS, expected=5 * nbb * 12)
+    combos = {}
+    for (s_, t_), v in sizes.items():
+        combos[(t_, v[3])] = v[1]
+    W["ceiling"] = dict(tier=1, ft_runs=len(combos) * 3 * 3 * 2,
+                        ft_steps=sum(3 * 3 * 2 * ft(n * 2 / 3) for n in combos.values()),
+                        encoders=[(d, k, o, 42, "merged", None) for d in DATASETS_REV
+                                  for k, o in (("raw", "mlm"), ("canon", "mlm"), ("canon", "yaw"))],
+                        eval_windows=0, xgb_feat=[],
+                        xgb_fit_units=sum(3 * 2 * (n * 2 / 3) * len(l) for (t_, l), n in combos.items()),
+                        unimts_steps=0, log="ceiling", arms=None, expected=len(combos) * 3 * (3 * 2 + 2))
+    rot_arms = ABLATION_ARMS + ["E_so3aug", "G_pca", "H_mizell"]
+    n_angles = sum(len(v) for v in ROT_PERTURB.values())
+    W["rotation"] = dict(tier=1, ft_runs=len(rot_arms) * 3 * 2 * 4,
+                         ft_steps=sum(len(rot_arms) * 3 * 2 * ft(n_all[d] * 2 / 3) for d in DATASETS_REV),
+                         encoders=[(d, ARMS_REV[a]["kind"], ARMS_REV[a]["obj"], 42, "merged", None)
+                                   for d in DATASETS_REV for a in rot_arms],
+                         eval_windows=sum(len(rot_arms) * 2 * n_all[d] * n_angles for d in DATASETS_REV),
+                         xgb_feat=[], xgb_fit_units=0, unimts_steps=0, log="rotation", arms=None,
+                         expected=sum(len(rot_arms) * 3 * 2 * n_angles for d in DATASETS_REV))
+    W["unimts"] = dict(tier=1, ft_runs=12 * 2 * 2, ft_steps=0, encoders=[], eval_windows=0, xgb_feat=[],
+                       xgb_fit_units=0,
+                       # per (frame, seed): 10 epochs of training + one forward pass over the target
+                       unimts_steps=sum(2 * 2 * (10 * ceil_(v[0], 64) + ceil_(v[1], 64) / 3)
+                                        for v in sizes.values()),
+                       log="unimts", arms=None, expected=12 * 2 * 2)
+    W["site"] = dict(tier=2, ft_runs=2 * nb * 12, ft_steps=2 * nb * src_steps, encoders=enc_ab,
+                     eval_windows=0, xgb_feat=[], xgb_fit_units=0, unimts_steps=0,
+                     log="main", arms=SITE_ARMS, expected=2 * nb * 12)
+    post_cross = (("uci", "motion"), ("motion", "uci"), ("uci", "shoaib"), ("shoaib", "uci"),
+                  ("motion", "shoaib"), ("shoaib", "motion"))
+    pw = [d for d in ("uci", "motion", "shoaib", "hhar")]
+    W["posture"] = dict(tier=2, ft_runs=4 * 2 * (3 * len(pw) + len(post_cross)),
+                        ft_steps=4 * 2 * (sum(3 * ft(n_post[d] * 2 / 3) for d in pw)
+                                          + sum(ft(n_post[s_]) for s_, _ in post_cross)),
+                        encoders=[(d, k, o, 42, "posture", None) for d in pw
+                                  for k, o in (("raw", "mlm"), ("canon", "mlm"), ("canon", "yaw"))],
+                        eval_windows=0, xgb_feat=[], xgb_fit_units=0, unimts_steps=0, log="posture",
+                        arms=None, expected=4 * 2 * (3 * len(pw) + len(post_cross)))
+    W["hparam"] = dict(tier=2, ft_runs=9 * 2 * (4 + 12),
+                       ft_steps=9 * 2 * (sum(ft(0.8 * n_all[d]) for d in DATASETS_REV) + src_steps),
+                       encoders=[(d, "canon", "yaw", 42, "merged", lam) for d in DATASETS_REV
+                                 for lam in (0.03, 0.1, 0.3)],
+                       eval_windows=0, xgb_feat=[], xgb_fit_units=0, unimts_steps=0, log="hparam",
+                       arms=None, expected=9 * 2 * (4 + 12))
+    W["augspec"] = dict(tier=3, ft_runs=7 * 4 * 12, ft_steps=7 * 4 * src_steps,
+                        encoders=[(d, "canon", "yaw", ps, "merged", None) for d in DATASETS_REV
+                                  for ps in (42, 43)],
+                        eval_windows=0, xgb_feat=[], xgb_fit_units=0, unimts_steps=0, log="augspec",
+                        arms=None, expected=7 * 4 * 12)
+    n_pos = n_all["shoaib"] / 5
+    W["positions"] = dict(tier=3, ft_runs=6 * 20 * 3, ft_steps=6 * 20 * 3 * ft(n_pos),
+                          encoders=[("shoaib", ARMS_REV[a]["kind"], ARMS_REV[a]["obj"], 42, "merged", None)
+                                    for a in ("A_ssl", "B_grav", "C_yaw", "D_gravyaw", "G_pca", "H_mizell")],
+                          eval_windows=0, xgb_feat=[], xgb_fit_units=0, unimts_steps=0, log="positions",
+                          arms=None, expected=6 * 20 * 3)
+    return W
+
+
+def estimate_cost(pre_epochs_assumed=60, unimts=False):
+    """Measure per-step times of the real training code on this runtime (about a
+    minute; pass unimts=True to also time UniMTS, which clones it and downloads the
+    checkpoint), then multiply by the exact amount of work of every stage, computed
+    from the dataset sizes, pair label sets and seed budgets. Runs already in the
+    CSVs and encoders already cached are subtracted, so calling this again later
+    gives the REMAINING time. Pretraining stops early between 30 and 80 epochs; the
+    estimate assumes `pre_epochs_assumed` and also prints the 30/80 bounds."""
+    r = _measure_rates(unimts)
+    W = _stage_work(pre_epochs_assumed)
+    seen_enc, seen_feat = set(), set()
     rows = []
-    for k, (nft, npre) in stages.items():
-        h = (nft * ft_run + npre * pre_run) / 3600 * 0.7   # sources smaller than Shoaib on average
-        rows.append({"stage": k, "fine-tunes": nft, "new pretrains": npre, "approx_hours": round(h, 1)})
+    for stage, w in W.items():
+        # encoders that this stage would have to pretrain (not cached, not counted earlier)
+        pre_h = 0.0; n_new = 0
+        for (d, kind, obj, seed, lm, lam) in w["encoders"]:
+            lam = REV["lam"] if lam is None else lam
+            fp = get_ds(d, lm)[4]
+            _, path = _enc_path(d, kind, obj, seed, fp, lam, REV["warm"])
+            if path in seen_enc or os.path.exists(path):
+                continue
+            seen_enc.add(path); n_new += 1
+            steps = -(-len(get_ds(d, lm)[1]) // REV["pre_bs"]) * pre_epochs_assumed
+            pre_h += steps * (r["pre_step"] if obj == "mlm" else r["pre_step_cons"]) / 3600
+        feat_h = 0.0
+        for (d, kind) in w["xgb_feat"]:
+            fp = get_ds(d)[4]
+            if (d, kind) in seen_feat or os.path.exists(
+                    os.path.join(REV_DIR, "cache", f"xgbfeat_{d}_{fp}_{kind}.pkl")):
+                continue
+            seen_feat.add((d, kind))
+            feat_h += len(get_ds(d)[1]) * r["xgb_feat_per_window"] / 3600
+        done = 0
+        lp = os.path.join(REV_DIR, "runs", f"{w['log']}.csv")
+        if os.path.exists(lp):
+            lg = pd.read_csv(lp)
+            if w["arms"] is not None:
+                lg = lg[lg.arm.isin(w["arms"])]
+            done = len(lg)
+        left = max(0.0, 1.0 - done / max(w["expected"], 1))
+        work_h = left * (w["ft_steps"] * r["ft_step"] + w["eval_windows"] * r["eval_per_window"]
+                         + w["xgb_fit_units"] * r["xgb_fit_per_sample_class"]
+                         + w["unimts_steps"] * r["unimts_step"]) / 3600
+        rows.append({"stage": stage, "tier": w["tier"], "fine-tuning runs": w["ft_runs"],
+                     "done": f"{100 * (1 - left):.0f}%", "new encoders": n_new,
+                     "pretrain_h": pre_h, "train+eval_h": work_h + feat_h, "total_h": pre_h + work_h + feat_h})
     df = pd.DataFrame(rows)
-    _p(f"[cost] {source}: pretrain {tp:.1f} s/epoch, fine-tune {tf:.1f} s/epoch on {DEVICE}")
-    _p(df.to_string(index=False))
+    gpu = torch.cuda.get_device_name(0) if DEVICE.type == "cuda" else str(DEVICE)
+    _p(f"[cost] {gpu}: fine-tune step {1000 * r['ft_step']:.1f} ms (batch {REV['ft_bs']}), "
+       f"pretrain step {1000 * r['pre_step']:.1f} ms / {1000 * r['pre_step_cons']:.1f} ms with consistency "
+       f"(batch {REV['pre_bs']}), UniMTS step {1000 * r['unimts_step']:.0f} ms "
+       f"({'measured' if r['unimts_measured'] else 'ASSUMED -- estimate_cost(unimts=True) measures it'})")
+    _p(df.round(1).to_string(index=False))
+    for t in (1, 2, 3):
+        d = df[df.tier == t]
+        pre = d.pretrain_h.sum()
+        lo = d.total_h.sum() - pre + pre * 30 / pre_epochs_assumed
+        hi = d.total_h.sum() - pre + pre * 80 / pre_epochs_assumed
+        _p(f"  Tier {t}: {d.total_h.sum():.1f} h remaining (pretraining stopping at 30-80 epochs: "
+           f"{lo:.1f}-{hi:.1f} h)")
     return df
 
 

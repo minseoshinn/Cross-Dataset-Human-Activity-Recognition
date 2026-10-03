@@ -164,7 +164,7 @@ step("label efficiency", lambda: NS["exp_label_efficiency"](pairs=(("hhar", "uci
 step("autoaug (pipeline search)", lambda: NS["exp_autoaug"](pairs=[("hhar", "uci")], ft_seeds=(42,),
                                                             search_epochs=1))
 step("inference benchmark + export", lambda: NS["inference_benchmark"](n=64, reps=2))
-step("cost estimate", lambda: NS["estimate_cost"]("hhar"))
+step("cost estimate", lambda: NS["estimate_cost"]())
 
 
 # ----------------------------------------------------------------------------- UniMTS with a stand-in model

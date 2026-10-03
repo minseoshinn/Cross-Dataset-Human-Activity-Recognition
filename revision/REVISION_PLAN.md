@@ -169,7 +169,7 @@ Approximate run counts:
 | hparam | about 290 | |
 | unimts | 48 | the slowest per run; reduce with `max_train` or `epochs` if needed |
 
-Expect several Colab sessions. Every stage skips runs that are already in its CSV.
+Estimated Tier 1 time, computed from the real dataset sizes with typical step times: about 18 h on an A100 (xgb 0.7, ablation 6.3, baselines 4.1, ceiling 1.9, rotation 2.3, UniMTS 3.0) and about 40 h on a T4, where UniMTS alone takes about 12 h. `estimate_cost()` replaces these assumptions with step times measured on your runtime and subtracts finished runs, so it also reports the remaining time mid-way. Expect several Colab sessions. Every stage skips runs that are already in its CSV.
 
 Re-run A–D rather than reusing E2, for three reasons:
 
