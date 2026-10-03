@@ -151,3 +151,15 @@ Every reported cell records which mechanism produced it (searched policy or fixe
 prior), in `results/provenance.csv`.
 
  
+
+---
+
+## Revision experiments (draft 3)
+
+`revision/` contains the experiments that answer the review of draft 2:
+corrected data loading (MotionSense iOS sign convention, subject IDs), the 2x2 ablation,
+five added baselines plus UniMTS, in-domain ceilings, controlled device- and gravity-frame
+rotations on all four datasets, posture classes, source-only hyperparameter selection,
+and the statistics and tables built from one per-run log. Start with
+`revision/REVISION_PLAN.md`; run `revision/Revision_Runner.ipynb` in Colab;
+`python revision/smoke_test.py` checks every stage on synthetic data (CPU, ~3 min).
