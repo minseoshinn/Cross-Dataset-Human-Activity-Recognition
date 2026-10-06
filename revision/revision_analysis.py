@@ -19,6 +19,12 @@ try:
 except NameError:
     REV_DIR = os.environ.get("REV_DIR", os.path.join(os.getcwd(), "revision_results"))
 
+try:
+    RUN_TAG  # noqa: F821  (set by revision_experiments.py: run-log version)
+except NameError:
+    RUN_TAG = os.environ.get("RUN_TAG", "v2")
+UNTAGGED_LOGS = {"xgb"}          # no fine-tuning, so not re-run under the v2 check
+
 ANA_DATASETS = ["hhar", "uci", "motion", "shoaib"]
 DNAME = {"hhar": "HHAR", "uci": "UCI-HAR", "motion": "MotionSense", "shoaib": "Shoaib"}
 ARM_LABEL = {
@@ -46,7 +52,8 @@ def _tab_dir():
 def load_runs(*names):
     dfs = []
     for n in names:
-        p = os.path.join(REV_DIR, "runs", f"{n}.csv")
+        f = n if (n in UNTAGGED_LOGS or not RUN_TAG) else f"{n}_{RUN_TAG}"
+        p = os.path.join(REV_DIR, "runs", f"{f}.csv")
         if os.path.exists(p):
             dfs.append(pd.read_csv(p))
     if not dfs:

@@ -65,7 +65,19 @@ REV = dict(
     budget_baselines={"pre": (42, 43), "ft": (42, 43)},
     ios_sign_fix=True,  # c33: Core Motion reports -specific force (flat, face up: z=-1 g)
     gate_g=5.0 / G_REV, # gravity gate in g units (acc stored in g)
+    # Source-only failure check for every fine-tuning run. A run whose macro-F1 on its
+    # own (clean) SOURCE training windows is below ft_min_src_f1 is a failed
+    # optimisation (the head collapses to one or two classes); it is repeated with
+    # fine-tuning seed + 1000*k, at most ft_max_tries times in total. No target data
+    # is involved, so the domain-generalisation protocol is unchanged. Attempts and
+    # the source F1 are written to the 'extra' column of every logged run.
+    ft_check=True, ft_min_src_f1=0.5, ft_max_tries=3,
 )
+
+# Run logs are versioned. v2 = every neural fine-tuning passes the source-only check
+# above, and UniMTS uses one common body joint. Logs without the check (runs/<name>.csv)
+# are kept untouched for comparison; the XGBoost log has no fine-tuning and keeps its name.
+RUN_TAG = "v2"
 
 PAIRS = [("hhar", "uci"), ("uci", "hhar"), ("hhar", "motion"), ("motion", "hhar"),
          ("hhar", "shoaib"), ("shoaib", "hhar"), ("uci", "motion"), ("motion", "uci"),
@@ -658,10 +670,42 @@ class HARModelRev(nn.Module):
 
 
 def finetune_rev(enc_state, X, y, n_classes, aug=None, seed=42, floor=None, aux=None,
-                 epochs=None):
+                 epochs=None, check=None):
     """Fine-tune encoder + GRU head end to end, class-weighted CE (Eq. 8). If `aug` is
     set, each batch passes clean with probability `floor`, otherwise through the op.
-    Fixed epoch count, no early stopping, no validation data of any kind (c48)."""
+    Fixed epoch count, no early stopping, no validation data of any kind (c48).
+    With the source-only check on (REV['ft_check']), a run whose macro-F1 on its own
+    clean SOURCE training windows is below REV['ft_min_src_f1'] is repeated with seed
+    + 1000*k; the best of at most REV['ft_max_tries'] attempts by that source F1 is
+    returned. The model carries .attempts and .src_f1 for the run log."""
+    check = REV["ft_check"] if check is None else check
+    tries = REV["ft_max_tries"] if check else 1
+    best = None
+    for k in range(tries):
+        m = _finetune_once(enc_state, X, y, n_classes, aug, seed + 1000 * k, floor, aux, epochs)
+        m.src_f1 = float("nan")
+        if check:
+            pred = predict_rev(m, X, aux)
+            m.src_f1 = float(f1_score(np.asarray(y), pred, labels=list(range(n_classes)),
+                                      average="macro", zero_division=0))
+        if best is None or m.src_f1 > best.src_f1:
+            best = m
+        if not check or m.src_f1 >= REV["ft_min_src_f1"]:
+            break
+        _p(f"    [ft-check] seed {seed + 1000 * k}: source F1 {m.src_f1:.3f} < "
+           f"{REV['ft_min_src_f1']} -> retry")
+    best.attempts = k + 1
+    return best
+
+
+def ft_meta(m):
+    """Fine-tuning attempts and source F1, for the 'extra' column of the run log."""
+    return {"ft_attempts": int(getattr(m, "attempts", 1)),
+            "src_f1": round(float(getattr(m, "src_f1", float("nan"))), 4)}
+
+
+def _finetune_once(enc_state, X, y, n_classes, aug=None, seed=42, floor=None, aux=None,
+                   epochs=None):
     floor = REV["floor"] if floor is None else floor
     epochs = REV["ft_epochs"] if epochs is None else epochs
     set_seed(seed)
@@ -730,8 +774,9 @@ LOG_COLS = ["exp", "source", "target", "arm", "pre_seed", "ft_seed", "fold", "pe
 
 
 class RunLog:
-    def __init__(self, name):
-        self.path = os.path.join(REV_DIR, "runs", f"{name}.csv")
+    def __init__(self, name, tag=None):
+        tag = RUN_TAG if tag is None else tag
+        self.path = os.path.join(REV_DIR, "runs", f"{name}_{tag}.csv" if tag else f"{name}.csv")
         self.keys = set()
         if os.path.exists(self.path):
             prev = pd.read_csv(self.path)
@@ -824,9 +869,10 @@ def _run_cell(log, exp, src, tgt, arm, Xs, ys_idx, Xt, yt, labels, enc_src, labe
             r = metrics_rev(yt, pred, labels)
             log.add(dict(exp=exp, source=src, target=tgt, arm=name, pre_seed=ps, ft_seed=fs,
                          fold=fold, labels=json.dumps(labels), n_train=len(Xs), n_test=len(Xt),
-                         data_fp=data_fp, extra=json.dumps(extra or {}), **r))
+                         data_fp=data_fp, extra=json.dumps(dict(extra or {}, **ft_meta(m))), **r))
             _p(f"  [{exp}] {src}->{tgt} {name:10s} fold {fold:2d} pre {ps} ft {fs}  "
-               f"F1 {r['macro_f1']:.3f}  stairs {r['stairs_f1']:.3f}")
+               f"F1 {r['macro_f1']:.3f}  stairs {r['stairs_f1']:.3f}"
+               + (f"  (attempts {m.attempts})" if getattr(m, "attempts", 1) > 1 else ""))
 
 
 # =============================================================================
@@ -882,7 +928,7 @@ def _xgb_fit_predict(Fs, ys_idx, Ft, n_classes, seed):
 
 def exp_xgb(pairs=None, kinds=("raw", "canon"), seeds=(42, 43, 44), label_mode="merged"):
     pairs = pairs or PAIRS
-    log = RunLog("xgb")
+    log = RunLog("xgb", tag="")      # no fine-tuning: the existing log stays valid
     for src, tgt in pairs:
         for kind in kinds:
             arm = f"XGB_{kind}"
@@ -1075,7 +1121,8 @@ def exp_rotation(datasets=None, arms=None, perturbs=None, n_folds=3, pre_seeds=(
                                          labels=json.dumps(labels), n_train=len(tr), n_test=len(te),
                                          data_fp=fp, extra=json.dumps(
                                              {"psi_bins": bins,
-                                              "psi_median": float(np.median(np.abs(psi)))}), **r))
+                                              "psi_median": float(np.median(np.abs(psi))),
+                                              **ft_meta(m)}), **r))
                         _p(f"  [rot] {dname} {arm:10s} fold {k} pre {ps} ft {fs} done")
     return log.df()
 
@@ -1167,7 +1214,7 @@ def exp_hparam(lams=(0.03, 0.1, 0.3), floors=(0.0, 0.3, 0.5), sources=None, pair
                     log.add(dict(exp="hparam_val", source=src, target=src, arm=arm, pre_seed=pre_seed,
                                  ft_seed=fs, labels=json.dumps(labels), n_train=len(tr), n_test=len(va),
                                  data_fp=fp, cfg=json.dumps({"lam": lam, "floor": fl, "warm": REV["warm"]}),
-                                 extra=json.dumps({"clean_f1": r_clean["macro_f1"]}), **r))
+                                 extra=json.dumps({"clean_f1": r_clean["macro_f1"], **ft_meta(m)}), **r))
                     _p(f"  [hp-val] {src} lam {lam} floor {fl} ft {fs}: rotated-val F1 "
                        f"{r['macro_f1']:.3f} (clean {r_clean['macro_f1']:.3f})")
     for src, tgt in pairs:
@@ -1292,7 +1339,8 @@ def exp_label_efficiency(pairs=(("hhar", "uci"), ("shoaib", "motion")), ks=(0, 5
                         r = metrics_rev(yt[hold], pred, labels)
                         log.add(dict(exp="labeleff", source=src, target=tgt, arm=arm, pre_seed=ps,
                                      ft_seed=fs, perturb="k", angle=k, labels=json.dumps(labels),
-                                     n_train=len(Xtr), n_test=len(hold), data_fp=fp, **r))
+                                     n_train=len(Xtr), n_test=len(hold), data_fp=fp,
+                                     extra=json.dumps(ft_meta(m)), **r))
     return log.df()
 
 
@@ -1353,6 +1401,21 @@ def exp_autoaug(pairs=None, settings=(("autoaug_raw", "raw", "mlm"), ("autoaug_o
 UNIMTS_DIR = os.environ.get("UNIMTS_DIR", "/content/UniMTS")
 UNIMTS_JOINTS = {"hhar": [9], "uci": [9], "motion": [1, 5],
                  "shoaib": {0: [1], 1: [5], 2: [21], 3: [20], 4: [0]}}
+# Placement. "dataset" uses the per-dataset joints above; the classifier is then
+# fine-tuned on the source joints and receives zeros there on any target recorded
+# elsewhere, which made v1 collapse on every pair whose placements differ (only
+# HHAR<->UCI-HAR, both waist, worked). "common" puts every dataset on one joint:
+# under domain generalisation the target placement is unknown, so the model must
+# not rely on it. v2 uses "common".
+UNIMTS_PLACEMENT = "common"
+UNIMTS_COMMON_JOINT = [9]
+
+
+def _unimts_joints(name, meta, mask):
+    if UNIMTS_PLACEMENT == "common":
+        return UNIMTS_COMMON_JOINT
+    j = UNIMTS_JOINTS[name]
+    return [j[int(p)] for p in meta["position"][mask]] if isinstance(j, dict) else j
 
 
 def setup_unimts():
@@ -1405,9 +1468,7 @@ def exp_unimts(pairs=None, frames=("raw", "canon"), epochs=10, ft_seeds=(42, 43)
             labels = sorted(int(c) for c in set(np.unique(ys_all)) & set(np.unique(yt_all)))
             a, b = np.isin(ys_all, labels), np.isin(yt_all, labels)
             Xs, Xt = prep(Xs_r[a], frame), prep(Xt_r[b], frame)
-            js = UNIMTS_JOINTS[src]; jt = UNIMTS_JOINTS[tgt]
-            js = [js[int(p)] for p in ms_meta["position"][a]] if isinstance(js, dict) else js
-            jt = [jt[int(p)] for p in mt_meta["position"][b]] if isinstance(jt, dict) else jt
+            js = _unimts_joints(src, ms_meta, a); jt = _unimts_joints(tgt, mt_meta, b)
             lmap = {c: i for i, c in enumerate(labels)}
             ys = np.array([lmap[v] for v in ys_all[a]]); yt = yt_all[b]
             for fs in ft_seeds:
@@ -1446,7 +1507,9 @@ def exp_unimts(pairs=None, frames=("raw", "canon"), epochs=10, ft_seeds=(42, 43)
                 r = metrics_rev(yt, pred, labels)
                 log.add(dict(exp="unimts", source=src, target=tgt, arm=arm, pre_seed=0, ft_seed=fs,
                              labels=json.dumps(labels), n_train=len(tr_idx), n_test=len(Xt),
-                             data_fp=f"{fps}|{fpt}", extra=json.dumps({"epochs": epochs, "gyro": gyro}),
+                             data_fp=f"{fps}|{fpt}",
+                             extra=json.dumps({"epochs": epochs, "gyro": gyro,
+                                               "placement": UNIMTS_PLACEMENT}),
                              **r))
                 _p(f"  [unimts] {src}->{tgt} {arm} seed {fs}  F1 {r['macro_f1']:.3f}")
                 del model; torch.cuda.empty_cache() if DEVICE.type == "cuda" else None
@@ -1975,7 +2038,7 @@ def estimate_cost(pre_epochs_assumed=60, unimts=False):
             seen_feat.add((d, kind))
             feat_h += len(get_ds(d)[1]) * r["xgb_feat_per_window"] / 3600
         done = 0
-        lp = os.path.join(REV_DIR, "runs", f"{w['log']}.csv")
+        lp = RunLog(w["log"], tag="" if w["log"] == "xgb" else None).path
         if os.path.exists(lp):
             lg = pd.read_csv(lp)
             if w["arms"] is not None:

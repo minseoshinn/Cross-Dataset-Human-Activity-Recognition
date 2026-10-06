@@ -44,8 +44,15 @@ mapping are in `revision/REVISION_PLAN.md`.
 1. Runtime → Change runtime type → GPU.
 2. Run the setup cell and Parts 1–3. They only define functions and take a few seconds.
 3. Run the stage cells in order. Each stage appends one row per run to
-   `MyDrive/revision/runs/*.csv` and skips runs that are already there, so after a
+   `MyDrive/revision/runs/<stage>_v2.csv` and skips runs that are already there, so after a
    disconnect re-run the setup cell and Parts 1–3, then the interrupted stage.
+
+**v2 (current).** Every fine-tuning run must reach macro-F1 ≥ 0.5 on its own source
+training windows; otherwise it is repeated with a new fine-tuning seed (at most 3 attempts,
+logged in the `extra` column). The check uses no target data. UniMTS places every dataset
+on one common body joint. The v1 logs (`runs/<stage>.csv`) are kept but no longer read;
+pretrained encoders, data caches and the XGBoost log are reused, so v2 repeats only the
+fine-tuning.
 4. Run the last cell for tables, tests, figures and `headline_numbers.json`
    (written to `MyDrive/revision/tables/`).
 
@@ -76,12 +83,27 @@ print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N
     code('run_stage("xgb")        # engineered features, raw + canonicalized, 12 pairs (CPU; cached after the first run)'),
     code('run_stage("ablation")   # A/B/C/D on 12 pairs, 2 pretraining x 4 fine-tuning seeds'),
     code('run_stage("baselines")  # SO(3) aug, learned SO(3), gravity + PCA heading, Mizell, OIT'),
-    code('run_stage("ceiling")    # in-domain ceilings on each pair\'s label set (c29 c64)'),
-    code('run_stage("rotation")   # controlled device- and gravity-frame rotations, 4 datasets (RQ3)'),
     code("""
 # UniMTS (c46.3): clones the official repo, installs CLIP, downloads the checkpoint.
 # To reduce cost: exp_unimts(epochs=5, max_train=20000)
 run_stage("unimts")
+"""),
+    code('run_stage("ceiling")    # in-domain ceilings on each pair\'s label set (c29 c64)'),
+    code('run_stage("rotation")   # controlled device- and gravity-frame rotations, 4 datasets (RQ3)'),
+    md("Check for failed runs at any time (training failures are now repeated automatically; "
+       "a model that works on the source but predicts few classes on the target is a real result "
+       "and stays):"),
+    code("""
+for name in ["main", "ceiling", "rotation", "posture", "hparam"]:
+    d = RunLog(name).df()
+    if not len(d):
+        continue
+    d = d.drop_duplicates(["exp", "source", "target", "arm", "pre_seed", "ft_seed", "fold"])
+    ex = d.extra.apply(lambda e: json.loads(e) if isinstance(e, str) and e.startswith("{") else {})
+    att = ex.apply(lambda x: x.get("ft_attempts", 1))
+    sf = ex.apply(lambda x: x.get("src_f1", float("nan")))
+    print(f"{name}: {len(d)} fine-tuned models, {int((att > 1).sum())} needed a retry, "
+          f"{int((sf < REV['ft_min_src_f1']).sum())} still below the source threshold")
 """),
     md("## Tier 2"),
     code('run_stage("site")       # where the yaw invariance must live (c39 c41)'),
