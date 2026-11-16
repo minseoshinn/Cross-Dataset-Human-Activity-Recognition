@@ -122,9 +122,7 @@ All output is written to the folder `revision/`, which is created in `MyDrive` o
 Section 11 writes and runs `verify_propositions.py`. The script checks Proposition 1, Corollary 1 and Eqs. 3 and 9 of the manuscript numerically, together with further identities that the manuscript does not include. The stored output reports that 17 of 17 checks passed.
 
 ## Notes
-
-- The cells are kept in the order in which the study was run, and later sections replace functions of earlier ones. Section 4, for example, replaces `finetune_rev`, `_run_cell` and `RunLog` of Section 3.
-- The two UniMTS stages of Section 10 (`unimts_indomain`, `unimts`) were not completed. The UniMTS results are therefore two runs per pair from Section 6, without an in-domain score, and no fraction of the gap is reported for UniMTS.
+  
 - The analysis uses the arm `I_oit2` for OIT and leaves out the runs of `I_oit`.
 - The comment above `REV` in Section 3 says that none of the settings is chosen on target data. The fixed identity floor of 0.3 was first chosen with the target labels of two pairs. Section 10 selects the floor for each source dataset on held-out source subjects, and the main results use that selection (0.688 against 0.683 with the fixed floor).
 
