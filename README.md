@@ -1,5 +1,3 @@
-# Notebook and run logs for an anonymous submission
-
 A model that recognizes activities from a phone's accelerometer and gyroscope loses accuracy when it is tested on a dataset other than the one it was trained on. Part of this loss comes from how the phone is carried. This repository contains the notebook of a study that measures how much of the gap between in-domain and cross-dataset macro-F1 is closed when device orientation is treated.
  
 ## Study design
