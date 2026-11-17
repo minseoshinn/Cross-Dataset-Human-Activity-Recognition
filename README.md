@@ -79,7 +79,7 @@ The runs stored in the notebook were made on Google Colab with one NVIDIA T4 GPU
 2. On Google Colab, run the setup cell of Section 1. It mounts Google Drive, installs XGBoost and reports the GPU. Elsewhere, skip this cell and set `HAR_DATA_ROOT`.
 3. Run the definition cells from top to bottom. These are the first code cells of Sections 2 to 5, 7 to 10 and 12. The order matters, because Sections 4, 5, 7 and 8 extend or replace functions of Section 3.
 4. Run the stages. Each call trains the runs of one stage and appends one row per run to its log. A stage that is called again skips the runs already in its log, so an interrupted session can be continued. `RUN_STAGES` in Section 2 is `False` in this file: the stage calls then return without training, and the analysis reads the run logs that exist. Set it to `True` to train.
-5. Run the analysis. It reads the logs and needs no GPU.
+5. Run the analysis.  
 
 | Call | Content |
 |---|---|
@@ -119,9 +119,9 @@ All output is written to the folder `revision/`, which is created in `MyDrive` o
 
 ## Numerical checks
 
-Section 11 writes and runs `verify_propositions.py`. The script checks Lemma 1, Corollary 1, Propositions 1 to 3 and 6 and Eqs. 3 and 9 of the manuscript numerically, together with further identities that the manuscript does not include. `v6_verify()` in Section 12 checks Corollary 2 and Propositions 3 to 5. The stored output reports that 17 of 17 checks passed.
+Section 11 writes and runs `verify_propositions.py`. The script checks Lemma 1, Corollary 1, Propositions 1 to 3 and 6 and Eqs. 3 and 9 of the manuscript numerically. `v6_verify()` in Section 12 checks Corollary 2 and Propositions 3 to 5. The stored output reports that 17 of 17 checks passed.
 
 ## Notes
   
 - The analysis uses the arm `I_oit2` for OIT and leaves out the runs of `I_oit`.
-- The comment above `REV` in Section 3 says that none of the settings is chosen on target data. The fixed identity floor of 0.3 was first chosen with the target labels of two pairs. Section 10 selects the floor for each source dataset on held-out source subjects, and the main results use that selection (0.688 against 0.683 with the fixed floor).
+- Regarding the comment above `REV` in Section 3, the fixed identity floor of 0.3 was first chosen with the target labels of two pairs. Section 10 selects the floor for each source dataset on held-out source subjects, and the main results use that selection (0.688 against 0.683 with the fixed floor).
