@@ -119,30 +119,7 @@ All output is written to the folder `revision/`, which is created in `MyDrive` o
 | `v6_all()` | Analyses of Section 12 from the run logs; writes `revision/tables/v6/` |
 
 `estimate_cost()` projected about 124 hours on the T4 GPU for the six stages it lists, of which 65 hours are for the matrix of 12 pairs. The stages of Sections 5, 8 and 10 add to this. `make_all(n_boot=300)` gives a quick check of the analysis with fewer bootstrap resamples.
-
-## Results of the manuscript
-
-The analysis uses fixed seeds for the bootstrap, so the same logs give the same tables.
-
-| Result | Call | Output in `revision/tables/` | Reads |
-|---|---|---|---|
-| Table 3: gap, fraction closed, remaining gap | `v5_make_all()` | `v5/T1_gap_fraction_summary.csv` | run logs |
-| Table 4 and Supplementary Table S1: differences and equivalence | `v5_make_all()`, `v6_contrasts()` | `v5/T3_differences_equivalence.csv`, `v6/T_contrasts_v6.csv` | run logs |
-| Tables 5 and 6, Supplementary Table S5: macro-F1 and stairs-F1 per pair | `v5_make_all()` | `v5/T9_main_matrix.csv` | run logs |
-| Supplementary Table S2: 2 × 2 ablation | `v5_make_all()` | `v5/T4_ablation_final.csv` | run logs |
-| Fig. 4: agreement of the treatments | `v5_make_all()` | `v5/fig_agreement.png` | run logs |
-| Repeated and failed fine-tuning runs | `v5_make_all()` | `v5/T10_failure_check.csv` | run logs |
-| Fractions with one dataset removed | `v5_lodo()` | `v5/lodo_fraction.csv` | run logs |
-| Treated in-domain reference | `v6_did()` | `v6/T_did_v6.csv` | run logs |
-| Kendall's W and its permutation reference | `v6_agreement()` | `v6/agreement_v6.json` | run logs |
-| Order-averaged attribution | `v6_shapley()` | `v6/T_shapley_v6.csv` | run logs |
-| Fig. 3: residual heading | `v5_fig3()` | figure | rotation logs, or the datasets |
-| Table 1: dataset statistics and device pose | `preprocessing_table()`, `antipode_report()`, `rotation_axis_decomposition()`, `heading_profile_v2()` | `c45_preprocessing.csv`, `c38_antipode.csv`, `rotation_axis_decomposition.csv`, `c32_heading_profile.csv` | datasets |
-| Table 2: shared classes | `pair_label_table()` | `c44_pair_labels_merged.csv` | datasets |
-| Supplementary Table S4: walking statistics | `cadence_energy_table()` | `c66_cadence_energy.csv` | datasets |
-
-The functions for Table 1, Table 2 and Supplementary Table S4 belong to the stage `audit`. With `RUN_STAGES = False`, call them directly.
-
+ 
 ## Numerical checks
 
 Section 11 writes and runs `verify_propositions.py`. The script checks Lemma 1, Corollary 1, Propositions 1 to 3 and 6 and Eqs. 3 and 9 of the manuscript numerically. `v6_verify()` in Section 12 checks Corollary 2 and Propositions 3 to 5. The stored output reports that 17 of 17 checks passed.
