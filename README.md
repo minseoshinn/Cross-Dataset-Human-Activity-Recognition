@@ -1,4 +1,4 @@
-# Orientation treatment and the cross-dataset gap in smartphone activity recognition
+# Notebook and run logs for an anonymous submission
 
 A model that recognizes activities from a phone's accelerometer and gyroscope loses accuracy when it is tested on a dataset other than the one it was trained on. Part of this loss comes from how the phone is carried. This repository contains the notebook of a study that measures how much of the gap between in-domain and cross-dataset macro-F1 is closed when device orientation is treated.
  
@@ -45,6 +45,7 @@ The datasets are public and are not distributed with the notebook.
 | 9 | Analysis: gap fraction, hierarchical bootstrap, equivalence tests, tables and figures |
 | 10 | Additional runs (log tag `v5`): identity floor selected on the source, equal run budgets, OIT with settings selected on the source |
 | 11 | Numerical checks of the formal statements |
+| 12 | Revision analyses without training (tag `v6`): treated in-domain reference, order-averaged attribution, permutation reference of Kendall's W, verdicts of the reporting protocol, further numerical checks |
 
 ## Data
 
@@ -78,8 +79,8 @@ The runs stored in the notebook were made on Google Colab with one NVIDIA T4 GPU
 
 1. Place the datasets under the data root.
 2. On Google Colab, run the setup cell of Section 1. It mounts Google Drive, installs XGBoost and reports the GPU. Elsewhere, skip this cell and set `HAR_DATA_ROOT`.
-3. Run the definition cells from top to bottom. These are the first code cells of Sections 2 to 5 and 7 to 10. The order matters, because Sections 4, 5, 7 and 8 extend or replace functions of Section 3.
-4. Run the stages. Each call trains the runs of one stage and appends one row per run to its log. A stage that is called again skips the runs already in its log, so an interrupted session can be continued.
+3. Run the definition cells from top to bottom. These are the first code cells of Sections 2 to 5, 7 to 10 and 12. The order matters, because Sections 4, 5, 7 and 8 extend or replace functions of Section 3.
+4. Run the stages. Each call trains the runs of one stage and appends one row per run to its log. A stage that is called again skips the runs already in its log, so an interrupted session can be continued. `RUN_STAGES` in Section 2 is `False` in this file: the stage calls then return without training, and the analysis reads the run logs that exist. Set it to `True` to train.
 5. Run the analysis. It reads the logs and needs no GPU.
 
 | Call | Content |
@@ -96,6 +97,7 @@ The runs stored in the notebook were made on Google Colab with one NVIDIA T4 GPU
 | `run_v4(...)`, `run_v4_all()` | Stages of the final configuration (Section 8) |
 | `v5_run("floor")`, `v5_run("budget")`, `v5_run("oit")` | Additional runs (Section 10) |
 | `make_all()`, `v5_make_all()` | Analysis: tables, figures and `manuscript_numbers.json` |
+| `v6_all()` | Revision analyses of Section 12; no training, writes `revision/tables/v6/` |
 
 `estimate_cost()` projected about 124 hours on the T4 GPU for the six stages it lists, of which 65 hours are for the matrix of 12 pairs. The stages of Sections 5, 8 and 10 add to this. `make_all(n_boot=300)` gives a quick check of the analysis with fewer bootstrap resamples.
 
@@ -119,14 +121,9 @@ All output is written to the folder `revision/`, which is created in `MyDrive` o
 
 ## Numerical checks
 
-Section 11 writes and runs `verify_propositions.py`. The script checks Proposition 1, Corollary 1 and Eqs. 3 and 9 of the manuscript numerically, together with further identities that the manuscript does not include. The stored output reports that 17 of 17 checks passed.
+Section 11 writes and runs `verify_propositions.py`. The script checks Lemma 1, Corollary 1, Propositions 1 to 3 and 6 and Eqs. 3 and 9 of the manuscript numerically, together with further identities that the manuscript does not include. `v6_verify()` in Section 12 checks Corollary 2 and Propositions 3 to 5. The stored output reports that 17 of 17 checks passed.
 
 ## Notes
   
 - The analysis uses the arm `I_oit2` for OIT and leaves out the runs of `I_oit`.
 - The comment above `REV` in Section 3 says that none of the settings is chosen on target data. The fixed identity floor of 0.3 was first chosen with the target labels of two pairs. Section 10 selects the floor for each source dataset on held-out source subjects, and the main results use that selection (0.688 against 0.683 with the fixed floor).
-
-
-## Contact
-
-Minseo Shin, hh7352913@gmail.com
